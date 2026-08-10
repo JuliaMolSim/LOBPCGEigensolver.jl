@@ -1,14 +1,7 @@
 # Small self-contained helpers used by the LOBPCG implementation. They are
 # intentionally kept minimal (only what the solver needs) so the package stays
 # free of any application-specific dependencies. Device-agnostic versions are
-# defined for generic `AbstractArray`s, with GPU-optimized variants dispatching
-# on `AbstractGPUArray`.
-
-"""
-Transfer an array from a device (typically a GPU) to the CPU.
-"""
-to_cpu(x::AbstractArray) = Array(x)
-to_cpu(x::Array) = x
+# defined for generic `AbstractArray`s.
 
 """
 Create an array of the same "array type" as `X` filled with zeros, minimizing the
@@ -31,12 +24,6 @@ end
 # Returns a vector of dot(A[:, i], B[:, i]), for all columns of A, B
 @views function columnwise_dots(A::AbstractArray{T}, B::AbstractArray{T}) where {T}
     [dot(A[:, i], B[:, i]) for i = 1:size(A, 2)]
-end
-
-# GPU-specific implementation: the massive parallelism of the GPU is only fully
-# exploited by operating on whole arrays rather than looping over columns.
-function columnwise_dots(A::AbstractGPUArray{T}, B::AbstractGPUArray{T}) where {T}
-    vec(sum(conj(A) .* B; dims=1))
 end
 
 format_log8(e) = @sprintf "%8.2f" log10(abs(e))
