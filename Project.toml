@@ -1,7 +1,7 @@
 name = "LOBPCGEigensolver"
 uuid = "87a0849e-8492-4fcc-8734-ba6a5d902784"
 authors = ["Michael F. Herbst <info@michael-herbst.com>", "Antoine Levitt <antoine.levitt@inria.fr>"]
-version = "0.1.1"
+version = "0.1.2"
 
 [deps]
 GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
