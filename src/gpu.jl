@@ -20,6 +20,7 @@ function ortho_chol_n!(X::AbstractGPUArray{T}; N::Int=2) where {T}
         for _ = 1:N
             O = mul_hermi(X', X)
             R = cholesky(O).U
+            @assert !any(isnan, R)
             rdiv!(X, R)
             nchol_total += 1
         end
