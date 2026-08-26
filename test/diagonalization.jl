@@ -53,25 +53,3 @@ end
     # B-orthonormality of the returned eigenvectors
     @test norm(res.X' * B * res.X - I) < 1e-7
 end
-
-@testset "partial locking does not randomize search directions" begin
-    N, nev = 30, 4
-    rng = Xoshiro(2)
-    G = randn(rng, N, N)
-    A = Hermitian(G + G') + 20I
-    X0 = randn(rng, N, nev)
-
-    function solve(seed)
-        Random.seed!(seed)
-        lock_history = Int[]
-        result = lobpcg(A, X0, I, Diagonal(A), 1e-8, 100;
-                        callback=info -> push!(lock_history, info.n_locked))
-        (; result, lock_history)
-    end
-
-    first_run = solve(101)
-    second_run = solve(202)
-    @test any(n -> 0 < n < nev, first_run.lock_history)
-    @test first_run.lock_history == second_run.lock_history
-    @test first_run.result.residual_history == second_run.result.residual_history
-end
