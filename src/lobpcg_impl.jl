@@ -516,31 +516,27 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
             return final_retval(full_X, full_AX, full_BX, full_λs, resid_history, niter, n_matvec)
         end
         newly_locked = nlocked - prev_nlocked
-        active = newly_locked+1:size(X,2)  # newly active vectors
+        # Indices of the new active vectors in X
+        active = newly_locked+1:size(X,2)
 
         if niter > 0
-            ### compute P = Y*cP only for the newly active vectors
-            Xn_indices = newly_locked+1:M-prev_nlocked
+            ### compute P = Y*cP
+            ### We set P to be the new active minus the old ones
             # TODO understand this for a potential save of an
             # orthogonalization, see Hetmaniuk & Lehoucq, and Duersch et. al.
             # cP = copy(cX)
-            # cP[Xn_indices,:] .= 0
+            # cP[active,:] .= 0
 
-            lenXn = length(Xn_indices)
-            e = zeros_like(X, size(cX, 1), M - prev_nlocked)
-            lower_diag = one(similar(X, lenXn, lenXn))
-            # e has zeros everywhere except on one of its lower diagonal
-            e[Xn_indices[1]:last(Xn_indices), 1:lenXn] = lower_diag
-
-            cP = cX .- e
-            cP = cP[:, Xn_indices]
-            # orthogonalize against all Xn (including newly locked)
+            cP = cX[:, active]  # Coefficients of the new active Ritz vectors in Y
+            cP[active, :] -= I  # Subtract the old active X coefficients in Y
+            # Orthogonalizing cP against cX is equivalent to orthogonalizing P
+            # against all new X, including newly locked vectors.
             @timeit timer "ortho! X vs Y" ortho!(cP, cX, cX; tol=ortho_tol, timer)
 
             @views begin
-                new_P = new_P[:, Xn_indices]
-                new_AP = new_AP[:, Xn_indices]
-                B != I && (new_BP = new_BP[:, Xn_indices])
+                new_P = new_P[:, active]
+                new_AP = new_AP[:, active]
+                B != I && (new_BP = new_BP[:, active])
             end
 
             # Get new P
