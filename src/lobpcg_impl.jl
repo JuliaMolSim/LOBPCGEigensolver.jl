@@ -520,26 +520,21 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
 
         if niter > 0
             ### compute P = Y*cP only for the newly active vectors
-            Xn_indices = newly_locked+1:M-prev_nlocked
             # TODO understand this for a potential save of an
             # orthogonalization, see Hetmaniuk & Lehoucq, and Duersch et. al.
             # cP = copy(cX)
-            # cP[Xn_indices,:] .= 0
+            # cP[active,:] .= 0
 
-            lenXn = length(Xn_indices)
-            e = zeros_like(X, size(cX, 1), M - prev_nlocked)
-            lower_diag = one(similar(X, lenXn, lenXn))
-            e[Xn_indices, Xn_indices] = lower_diag
-
-            cP = cX .- e
-            cP = cP[:, Xn_indices]
+            cP = cX[:, active]
+            active_identity = one(similar(cP, length(active), length(active)))
+            cP[active, :] .-= active_identity
             # orthogonalize against all Xn (including newly locked)
             @timeit timer "ortho! X vs Y" ortho!(cP, cX, cX; tol=ortho_tol, timer)
 
             @views begin
-                new_P = new_P[:, Xn_indices]
-                new_AP = new_AP[:, Xn_indices]
-                B != I && (new_BP = new_BP[:, Xn_indices])
+                new_P = new_P[:, active]
+                new_AP = new_AP[:, active]
+                B != I && (new_BP = new_BP[:, active])
             end
 
             # Get new P
