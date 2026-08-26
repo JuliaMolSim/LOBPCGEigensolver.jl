@@ -145,6 +145,13 @@ function *(Ablock::LazyHcat, B::AbstractMatrix)
 end
 
 
+# Falls back to default eigen
+_eigen_really_orthogonal(A) = eigen(A)
+function _eigen_really_orthogonal(A::Hermitian{<:BlasFloat, <:Array})
+    # We use syevd here to guarantee orthogonality: https://github.com/JuliaMolSim/DFTK.jl/pull/842
+    LinearAlgebra.LAPACK.syevd!('V', A.uplo, parent(A))
+end
+
 # Perform a Rayleigh-Ritz for the N first eigenvectors.
 function rayleigh_ritz(X, AX, N)
     XAX = mul_hermi(X', AX)
@@ -152,30 +159,9 @@ function rayleigh_ritz(X, AX, N)
     rayleigh_ritz(XAX, N)
 end
 @views function rayleigh_ritz(XAX::Hermitian, N)
-    # Fallback: Use whatever is the default dense eigensolver.
-    # Note: GenericLinearAlgebra uses a QR-based algorithm, which is pretty safe in terms
-    #       of keeping the vectors orthogonal
-    values, vectors = eigen(XAX)
-    vectors[:, 1:N], values[1:N]
-end
-@views function rayleigh_ritz(XAX::Hermitian{<:BlasFloat, <:Array}, N)
-    # LAPACK sysevr (the Julia default eigensolver up to 1.11 ) can actually return
-    # eigenvectors that are significantly non-orthogonal (1e-4 in Float32 in some tests)
-    # here, presumably because it tries hard to make them eigenvectors in the presence
-    # of small gaps. syevd (or DivideAndConquer()) does a much better job, see
-    # https://github.com/JuliaLang/julia/pull/49262 and
-    # https://github.com/JuliaLang/julia/pull/49355. It will be the default in 1.12.
-    # For versions < 1.12, since we mainly care about eigenvectors being orthogonal
-    # we re-orthogonalise explicitly.
-    @static if VERSION >= v"1.12"
-        values, vectors = eigen(XAX; alg=LinearAlgebra.DivideAndConquer())
-        return vectors[:, 1:N], values[1:N]
-    else
-        values, vectors = eigen(XAX)
-        v = vectors[:, 1:N]
-        ortho!(v)
-        return v, values[1:N]
-    end
+    values, vectors = _eigen_really_orthogonal(XAX)
+    (; vectors=vectors[:, 1:N], values=values[1:N],
+       vectors_ortho=vectors[:, N+1:end])
 end
 
 # B-orthogonalize X (in place) using only one B apply.
@@ -358,6 +344,29 @@ function compute_λ(X::AbstractGPUArray{T}, AX::AbstractGPUArray{T},
     vec(real.(num ./ den))
 end
 
+# Gets the coefficients cP of the new p vectors (Xn+1 - Xn, orthogonalized wrt the coefficients of Xn+1)
+# in the basis of Y, possibly after a locking step
+# cX are the coefficients of all the new vectors Xn+1
+# active is the index set of newly active vectors
+# Not actually used (the duersch version is faster), but kept for understanding and comparison
+function get_new_P(cX, active; tol, timer)
+    cP = cX[:, active] # the newly active Xn+1
+    cP[active, :] -= I  # subtract the active Xn
+    @timeit timer "ortho! X vs Y" ortho!(cP, cX, cX; tol, timer)
+end
+
+# Different implementation of the same operation as above, avoiding the orthogonalization (Duersch et al., section 4.2)
+# the previous one does ortho((1-Xn+1Xn+1') (Xn+1 - Xn)) = -ortho((1-Xn+1Xn+1')Xn) = -ortho(Xn+1_perp Xn+1_perp' Xn)
+# But because Xn+1_perp is orthogonal, that has the same span as -Xn+1_perp ortho(Xn+1_perp' Xn)
+# The advantage of this is that of avoids the ortho(x,y), only ortho(x) is needed; the result is orthogonal to Xn+1 by construction
+function get_new_P_duersch(cX, cXperp, active; tol, timer)
+    overlap = cXperp'[:, active] # Xn+1_perp'Xn
+    overlap .*= -1
+    cP = (@timeit timer "ortho!" ortho!(overlap; tol)).X
+    cXperp * cP
+end
+
+
 ### The algorithm is Xn+1 = rayleigh_ritz(hcat(Xn, A*Xn, Xn-Xn-1))
 ### We follow the strategy of Hetmaniuk and Lehoucq, and maintain a B-orthonormal basis Y = (X,R,P)
 ### After each rayleigh_ritz step, the B-orthonormal X and P are deduced by an orthogonal rotation from Y
@@ -459,8 +468,10 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
                 AY = LazyHcat(AX, AR)
                 BY = LazyHcat(BX, BR)  # data shared with (X, R) in non-general case
             end
-            cX, λs_RR = @timeit timer "rayleigh_ritz" rayleigh_ritz(Y, AY, M-nlocked)
-            λs .= λs_RR
+            ritz = @timeit timer "rayleigh_ritz" rayleigh_ritz(Y, AY, M-nlocked)
+            cX = ritz.vectors
+            cXperp = ritz.vectors_ortho
+            λs .= ritz.values
 
             # Update X. By contrast to some other implementations, we
             # wait on updating P because we have to know which vectors
@@ -521,17 +532,9 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
 
         if niter > 0
             ### compute P = Y*cP
-            ### We set P to be the new active minus the old ones
-            # TODO understand this for a potential save of an
-            # orthogonalization, see Hetmaniuk & Lehoucq, and Duersch et. al.
-            # cP = copy(cX)
-            # cP[active,:] .= 0
-
-            cP = cX[:, active]  # Coefficients of the new active Ritz vectors in Y
-            cP[active, :] -= I  # Subtract the old active X coefficients in Y
-            # Orthogonalizing cP against cX is equivalent to orthogonalizing P
-            # against all new X, including newly locked vectors.
-            @timeit timer "ortho! X vs Y" ortho!(cP, cX, cX; tol=ortho_tol, timer)
+            cP = @timeit timer "get new P" get_new_P_duersch(
+                cX, cXperp, active; tol=ortho_tol, timer
+            )
 
             @views begin
                 new_P = new_P[:, active]
