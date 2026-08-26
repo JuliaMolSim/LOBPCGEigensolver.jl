@@ -516,10 +516,12 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
             return final_retval(full_X, full_AX, full_BX, full_λs, resid_history, niter, n_matvec)
         end
         newly_locked = nlocked - prev_nlocked
-        active = newly_locked+1:size(X,2)  # newly active vectors
+        # Indices of the new active vectors in X
+        active = newly_locked+1:size(X,2)
 
         if niter > 0
-            ### compute P = Y*cP only for the newly active vectors
+            ### compute P = Y*cP
+            ### We set P to be the new active minus the old ones
             # TODO understand this for a potential save of an
             # orthogonalization, see Hetmaniuk & Lehoucq, and Duersch et. al.
             # cP = copy(cX)
