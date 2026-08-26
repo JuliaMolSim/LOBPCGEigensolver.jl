@@ -529,8 +529,7 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
             lenXn = length(Xn_indices)
             e = zeros_like(X, size(cX, 1), M - prev_nlocked)
             lower_diag = one(similar(X, lenXn, lenXn))
-            # e has zeros everywhere except on one of its lower diagonal
-            e[Xn_indices[1]:last(Xn_indices), 1:lenXn] = lower_diag
+            e[Xn_indices, Xn_indices] = lower_diag
 
             cP = cX .- e
             cP = cP[:, Xn_indices]
