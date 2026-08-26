@@ -177,6 +177,53 @@ function B_ortho!(X, BX)
     rdiv!(BX, U)
 end
 
+normest(M) = maximum(abs, diag(M)) + norm(M - Diagonal(diag(M)))
+
+function cholesky_diagnostics(R, invR)
+    @assert !any(isnan, invR)
+    norminvR = normest(invR)
+    (; normR=normest(R), norminvR)
+end
+
+# (maximum diagonal entry, Frobenius norm of the off-diagonal entries)
+@inline function _normest_term(value, row, column)
+    value = abs(value)
+    (ifelse(row == column, value, zero(value)),
+     ifelse(row < column, value, zero(value)))
+end
+
+@inline function _merge_normest(left, right)
+    (max(left[1], right[1]), hypot(left[2], right[2]))
+end
+
+@inline function _cholesky_diagnostic(factor, inverse, index)
+    row, column = Tuple(index)
+    (_normest_term(factor, row, column), _normest_term(inverse, row, column),
+     (row <= column) & isnan(inverse))
+end
+
+@inline function _merge_cholesky_diagnostics(left, right)
+    (_merge_normest(left[1], right[1]), _merge_normest(left[2], right[2]),
+     left[3] | right[3])
+end
+
+# Fuse the GPU diagnostics into one reduction.
+function cholesky_diagnostics(
+    R::UpperTriangular{T,<:AbstractGPUArray},
+    invR::UpperTriangular{T,<:AbstractGPUArray},
+) where {T}
+    zero_real = zero(real(T))
+    init = ((zero_real, zero_real), (zero_real, zero_real), false)
+    factor = parent(R)
+    inverse = parent(invR)
+    factor_normest, inverse_normest, inverse_has_nan = mapreduce(
+        _cholesky_diagnostic, _merge_cholesky_diagnostics,
+        factor, inverse, CartesianIndices(axes(factor)); init
+    )
+    @assert !inverse_has_nan
+    (; normR=sum(factor_normest), norminvR=sum(inverse_normest))
+end
+
 # Gets a Cholesky factorization of an Hermitian O = R'R, protecting for failure,
 # in which case gets something *ressembling* a Cholesky factorization
 # Standard Cholesky factorization can fail when O is ill-conditioned.
@@ -184,12 +231,13 @@ end
 function safe_cholesky(O::AbstractArray{T}; nchol=0, α=100) where {T}
     local R
     local invR
-    nchol >= 5 && return nothing, nothing, 10000 # give up
+    local diagnostics
+    nchol >= 5 && return nothing, nothing, nothing, 10000 # give up
     try
         nchol += 1
         R = cholesky(O).U
         invR = inv(R)
-        @assert !any(isnan, invR)
+        diagnostics = cholesky_diagnostics(R, invR)
     catch err
         @debug "Cholesky failed in ortho(X)"
         # see https://arxiv.org/pdf/1809.11085.pdf for a nice analysis
@@ -200,10 +248,9 @@ function safe_cholesky(O::AbstractArray{T}; nchol=0, α=100) where {T}
         return safe_cholesky(O; nchol, α)
     end
 
-    R, invR, nchol # we also return invR because it's used in the caller
+    R, invR, diagnostics, nchol
 end
 
-normest(M) = maximum(abs, diag(M)) + norm(M - Diagonal(diag(M)))
 # Orthogonalizes X to tol
 # Returns the new X, the number of Cholesky factorizations algorithm, and the
 # growth factor by which small perturbations of X can have been magnified
@@ -215,7 +262,7 @@ function ortho!(X::AbstractArray{T}; tol=2eps(real(T))) where {T}
     while true
         # get cholesky factor
         O = mul_hermi(X', X)
-        R, invR, nchol = safe_cholesky(O)
+        R, invR, diagnostics, nchol = safe_cholesky(O)
         nchol_total += nchol
         if nchol > 10
             @error("Ortho(X) is failing badly, falling back to SVD",
@@ -234,10 +281,10 @@ function ortho!(X::AbstractArray{T}; tol=2eps(real(T))) where {T}
         # ||invR|| = ||D + E|| ≤ ||D|| + ||E|| ≤ ||D|| + ||E||_F,
         # where ||.|| is the 2-norm and ||.||_F the Frobenius
 
-        norminvR = normest(invR)
+        norminvR = diagnostics.norminvR
         growth_factor *= norminvR
         # condR = 1/LAPACK.trcon!('I', 'U', 'N', Array(R))
-        condR = normest(R)*norminvR  # in practice this seems to be an OK estimate
+        condR = diagnostics.normR*norminvR  # in practice this seems to be an OK estimate
 
         @debug "Ortho(X) nchol_total $nchol_total $(eps(real(T))*condR^2) < $tol"
 
