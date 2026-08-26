@@ -527,10 +527,10 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
             # cP = copy(cX)
             # cP[active,:] .= 0
 
-            cP = cX[:, active]
-            active_identity = one(similar(cP, length(active), length(active)))
-            cP[active, :] .-= active_identity
-            # orthogonalize against all Xn (including newly locked)
+            cP = cX[:, active]  # Coefficients of the new active Ritz vectors in Y
+            cP[active, :] -= I  # Subtract the old active X coefficients in Y
+            # Orthogonalizing cP against cX is equivalent to orthogonalizing P
+            # against all new X, including newly locked vectors.
             @timeit timer "ortho! X vs Y" ortho!(cP, cX, cX; tol=ortho_tol, timer)
 
             @views begin
