@@ -171,7 +171,7 @@ end
 # therefore that it is safe to cholesky it and reuse the B apply)
 function B_ortho!(X, BX)
     O = mul_hermi(X', BX)
-    U = cholesky(O).U
+    U = cholesky!(O).U
     @assert !any(isnan, U)
     rdiv!(X, U)
     rdiv!(BX, U)
@@ -187,7 +187,7 @@ function safe_cholesky(O::AbstractArray{T}; nchol=0, α=100) where {T}
     nchol >= 5 && return nothing, nothing, 10000 # give up
     try
         nchol += 1
-        R = cholesky(O).U
+        R = cholesky!(O).U
         invR = inv(R)
         @assert !any(isnan, invR)
     catch err
@@ -272,18 +272,7 @@ function ortho!(X::AbstractArray{T}, Y, BY; tol=2eps(real(T)),
     while true
         BYX = BY' * X
         mul!(X, Y, BYX, -1, 1)  # X -= Y*BY'X
-        # If the orthogonalization has produced results below 2eps, we drop them
-        # This is to be able to orthogonalize eg [1;0] against [e^iθ;0],
-        # as can happen in extreme cases in the ortho!(cP, cX)
-        dropped = drop_small!(X; tol)
-        if !isempty(dropped)
-            X[:, dropped] .-= Y * (BY' * X[:, dropped])
-        end
 
-        if norm(BYX) < tol && niter > 1
-            push!(ninners, 0)
-            break
-        end
         X, ninner, growth_factor = @timeit timer "ortho!" ortho!(X; tol)
         push!(ninners, ninner)
 
@@ -310,6 +299,17 @@ function ortho!(X::AbstractArray{T}, Y, BY; tol=2eps(real(T)),
         niter += 1
     end
     @debug "Required $ninners choleskys in ortho!(X, Y)"
+
+    # If the orthogonalization has produced results below 2eps, we drop them
+    # This is to be able to orthogonalize eg [1;0] against [e^iθ;0],
+    # as can happen in extreme cases in the ortho!(cP, cX).
+    # This a rare occurance and an expensive check. Therefore, we do it once
+    # at the end of the iterative process, and start over completely if needed.
+    dropped = drop_small!(X; tol)
+    if !isempty(dropped)
+        X[:, dropped] .-= Y * (BY' * X[:, dropped])
+        ortho!(X, Y, BY; tol, timer)
+    end
 
     # @assert (norm(BY'X)) < tol
     # @assert (norm(X'X-I)) < tol
