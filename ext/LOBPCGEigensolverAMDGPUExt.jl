@@ -11,12 +11,12 @@ using LinearAlgebra
 # See https://github.com/JuliaGPU/AMDGPU.jl/issues/866#issuecomment-3636981853
 # Scaling a Float/Complex matrix with an Integer:
 function LinearAlgebra.mul!(C::AMDGPU.ROCArray{T}, A::AMDGPU.ROCArray{T}, B::AMDGPU.ROCArray{T},
-                            α::U, β::U) where {T<:Union{AbstractFloat,Complex}, U<:Integer}
+                            α::U, β::U) where {T<:Union{AbstractFloat,Complex{<:AbstractFloat}}, U<:Integer}
     LinearAlgebra.mul!(C, A, B, T(α), T(β))
 end
 # Scaling a Complex matrix with a Float:
 function LinearAlgebra.mul!(C::AMDGPU.ROCArray{T}, A::AMDGPU.ROCArray{T}, B::AMDGPU.ROCArray{T},
-                            α::U, β::U) where {T<:Complex, U<:AbstractFloat}
+                            α::U, β::U) where {T<:Complex{<:AbstractFloat}, U<:AbstractFloat}
     LinearAlgebra.mul!(C, A, B, T(α), T(β))
 end
 
