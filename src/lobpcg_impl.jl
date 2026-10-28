@@ -481,8 +481,8 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
 
         # Convergence concerns the lowest returned eigenpairs, not the number locked.
         λ_host = to_cpu(full_λs)  # Copy to CPU for element-wise access
-        p = sortperm(λ_host)
-        converged = niter ≥ miniter && all(<(tol), residual_norms[p[1:n_conv_check]])
+        perm = sortperm(λ_host)
+        converged = niter ≥ miniter && all(<(tol), residual_norms[perm[1:n_conv_check]])
         finished = converged || niter ≥ maxiter
 
         ### Compute number of locked vectors
@@ -543,13 +543,13 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
 
         if finished
             if !issorted(λ_host)
-                full_X  = full_X[:, p]
-                full_AX = full_AX[:, p]
-                full_BX = full_BX[:, p]
+                full_X  = full_X[:, perm]
+                full_AX = full_AX[:, perm]
+                full_BX = full_BX[:, perm]
             end
-            return (; λ=λ_host[p], X=full_X, AX=full_AX, BX=full_BX,
-                    residual_norms=residual_norms[p],
-                    residual_history=resid_history[p, 1:niter+1],
+            return (; λ=λ_host[perm], X=full_X, AX=full_AX, BX=full_BX,
+                    residual_norms=residual_norms[perm],
+                    residual_history=resid_history[perm, 1:niter+1],
                     n_matvec, n_iter=niter, converged)
         end
 
@@ -631,8 +631,8 @@ function (cb::DefaultLobpcgCallback)(info)
     cb.prev_time[] = current_time
 
     time = @sprintf "% 6s" prettytime(runtime_ns)
-    p = sortperm(to_cpu(info.λs))
-    resid_norm = norm(info.residual_norms[p[1:info.n_conv_check]])
+    perm = sortperm(to_cpu(info.λs))
+    resid_norm = norm(info.residual_norms[perm[1:info.n_conv_check]])
     resid_str = " " * format_log8(resid_norm)
 
     @printf("% 4d   %5d / %5d   %s       %s\n",
