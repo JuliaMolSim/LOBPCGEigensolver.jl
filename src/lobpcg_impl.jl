@@ -479,13 +479,13 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
         end
         @debug niter residual_norms
 
-        # Convergence concerns the lowest returned eigenpairs, not the number locked.
+        ### Check convergence (stopping if the lowest eigenpairs are converged)
         λ_host = to_cpu(full_λs)  # Copy to CPU for element-wise access
         perm = sortperm(λ_host)
         converged = niter ≥ miniter && all(<(tol), residual_norms[perm[1:n_conv_check]])
         finished = converged || niter ≥ maxiter
 
-        ### Compute number of locked vectors
+        ### Handle locking
         prev_nlocked = nlocked
         if niter ≥ miniter  # No locking if below miniter
             for i=nlocked+1:M
@@ -499,13 +499,12 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
                 end
             end
         end
-
         newly_locked = nlocked - prev_nlocked
         # Indices of the new active vectors in X
         active = newly_locked+1:size(X,2)
 
+        ### Compute P = Y*cP
         if niter > 0 && !finished
-            ### compute P = Y*cP
             cP = @timeit timer "get new P" get_new_P_duersch(
                 cX, cXperp, active; tol=ortho_tol, timer
             )
@@ -526,13 +525,14 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
             end
         end
 
-        # Update all X, even newly locked
+        ### Update X (even the newly locked)
         X  .= new_X
         AX .= new_AX
         if B != I
             BX .= new_BX
         end
 
+        ### Callback
         # Expose the full current block in storage order, including locked eigenpairs.
         # TODO: Some of these info field have not so canonical names compared to the
         #       rest of the algorithm, we should change this in the future.
@@ -541,22 +541,29 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
                   stage=:iterate, residual_norms, converged)
         callback(info)
 
+        ### Return
         if finished
+            # Return the sorted eigenpairs (the ones that are converged)
+            # only do the reshuffling if they're not already sorted
             if !issorted(λ_host)
                 full_X  = full_X[:, perm]
                 full_AX = full_AX[:, perm]
                 full_BX = full_BX[:, perm]
+                residual_norms = residual_norms[perm]
+                resid_history = resid_history[perm, :]
+                λ_host = λ_host[perm]
             end
-            return (; λ=λ_host[perm], X=full_X, AX=full_AX, BX=full_BX,
-                    residual_norms=residual_norms[perm],
-                    residual_history=resid_history[perm, 1:niter+1],
+            return (; λ=λ_host, X=full_X, AX=full_AX, BX=full_BX,
+                    residual_norms,
+                    residual_history=resid_history[:, 1:niter+1],
                     n_matvec, n_iter=niter, converged)
         end
 
-        # it is actually a good question of knowing when to
-        # precondition. Here seems sensible, but it could plausibly be
-        # done before or after
+        ### Precondition the new residuals
         if precon !== I
+            # it is actually a good question of knowing when to
+            # precondition. Here seems sensible, but it could plausibly be
+            # done before or after
             @timeit timer "preconditioning" begin
                 precondprep!(precon, new_X)  # update preconditioner if needed; defaults to noop
                 ldiv!(precon, new_R)
@@ -586,9 +593,8 @@ function lobpcg(A, X, B=I, precon=I, tol=1e-10, maxiter=100;
             BP = BP[:, active]
             λs = λs[active]
         end
-
-        # Update newly active P
         if niter > 0
+            # Update newly active P
             P .= new_P
             AP .= new_AP
             if B != I
